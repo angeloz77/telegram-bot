@@ -2,6 +2,8 @@ import asyncio
 import logging
 import aiosqlite
 import re
+import os
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
 from aiogram.filters import Command
@@ -10,10 +12,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# --- НАСТРОЙКИ ---
-TOKEN = "8602877893:AAEnnOJGL38RTHHg8Lipw15jy4KM97QjZ7s"
-# Сюда через запятую вписывай ID всех админов
-ADMIN_IDS = [778239872, 859249666] 
+load_dotenv()
+
+TOKEN = os.environ["BOT_TOKEN"]
+ADMIN_IDS = [int(x) for x in os.environ["ADMIN_IDS"].split(",")]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
