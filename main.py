@@ -114,9 +114,9 @@ async def delete_question(q_id: int):
         await db.execute('DELETE FROM questions WHERE id = ?', (q_id,))
         await db.commit()
 
-async def add_payout(user_id: int, amount: int):
+async def add_payout(user_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('INSERT INTO payouts (user_id, amount) VALUES (?, ?)', (user_id, amount))
+        await db.execute('INSERT INTO payouts (user_id, amount) VALUES (?, ?)', (user_id, 0))
         await db.commit()
 
 async def get_payouts():
@@ -234,13 +234,28 @@ async def open_apply(callback: CallbackQuery):
 @dp.callback_query(F.data == "open_payout")
 async def open_payout(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="25$", callback_data="payout_25"),
-         InlineKeyboardButton(text="50$", callback_data="payout_50")],
-        [InlineKeyboardButton(text="75$", callback_data="payout_75"),
-         InlineKeyboardButton(text="100$", callback_data="payout_100")],
+        [InlineKeyboardButton(text="✅ Запустить обработку", callback_data="payout_request")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel")]
     ])
-    await callback.message.answer("<b>Выбери сумму для вывода:</b>", reply_markup=kb, parse_mode="HTML")
+    await callback.message.answer("<b>Нажми кнопку для запуска обработки выплаты:</b>", reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data == "payout_request")
+async def process_payout(callback: CallbackQuery):
+    await add_payout(callback.from_user.id)
+
+    report = (
+        f"💰 <b>НОВАЯ ЗАЯВКА НА ВЫВОД!</b>\n\n"
+        f"👤 От: <a href='tg://user?id={callback.from_user.id}'>{callback.from_user.full_name}</a>\n"
+        f"USER_ID:<code>{callback.from_user.id}</code>"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, report, parse_mode="HTML")
+        except Exception:
+            pass
+
+    await callback.message.edit_text("✅ <b>Обработка запущена! Ожидай перевода.</b>", parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "open_question")
@@ -425,28 +440,6 @@ async def process_accept_bday(callback: CallbackQuery):
     await callback.answer("Одобрено ✅")
 
 # --- ВЫПЛАТЫ ---
-@dp.callback_query(F.data.startswith("payout_"))
-async def process_payout(callback: CallbackQuery):
-    amount = int(callback.data.split("_")[1])
-    await add_payout(callback.from_user.id, amount)
-
-    await callback.message.edit_text(f"✅ Заявка на вывод <b>{amount}$</b> успешно создана! Ожидай перевода.", parse_mode="HTML")
-
-    report = (
-        f"💰 <b>НОВАЯ ЗАЯВКА НА ВЫВОД!</b>\n\n"
-        f"👤 От: <a href='tg://user?id={callback.from_user.id}'>{callback.from_user.full_name}</a>\n"
-        f"💵 Сумма: <code>{amount}$</code>\n"
-        f"USER_ID:<code>{callback.from_user.id}</code>"
-    )
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(admin_id, report, parse_mode="HTML")
-        except Exception:
-            pass
-
-    await callback.answer("Заявка улетела админу 💸")
-
-# --- АДМИН ПАНЕЛЬ: СПИСКИ ---
 @dp.message(F.text == "💰 Список выводов", F.from_user.id.in_(ADMIN_IDS))
 async def show_payouts(message: Message):
     payouts = await get_payouts()
@@ -456,8 +449,8 @@ async def show_payouts(message: Message):
     builder = InlineKeyboardBuilder()
     for idx, row in enumerate(payouts, 1):
         p_id, u_id, amount, username, full_name = row
-        text += f"{idx}. <a href='tg://user?id={u_id}'>{full_name}</a> — <code>{amount}$</code>\n"
-        builder.button(text=f"✅ Выплачено: {full_name} ({amount}$)", callback_data=f"del_payout_{p_id}")
+        text += f"{idx}. <a href='tg://user?id={u_id}'>{full_name}</a>\n"
+        builder.button(text=f"✅ Выплачено: {full_name}", callback_data=f"del_payout_{p_id}")
 
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel"))
@@ -476,8 +469,8 @@ async def process_del_payout(callback: CallbackQuery):
     builder = InlineKeyboardBuilder()
     for idx, row in enumerate(payouts, 1):
         p_id, u_id, amount, username, full_name = row
-        text += f"{idx}. <a href='tg://user?id={u_id}'>{full_name}</a> — <code>{amount}$</code>\n"
-        builder.button(text=f"✅ Выплачено: {full_name} ({amount}$)", callback_data=f"del_payout_{p_id}")
+        text += f"{idx}. <a href='tg://user?id={u_id}'>{full_name}</a>\n"
+        builder.button(text=f"✅ Выплачено: {full_name}", callback_data=f"del_payout_{p_id}")
 
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel"))
