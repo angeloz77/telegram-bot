@@ -144,10 +144,17 @@ def get_main_kb(user_id):
         ]
     else:
         buttons = [
-            [KeyboardButton(text="📝 Подать заявку"), KeyboardButton(text="💸 Поставить выплату")],
-            [KeyboardButton(text="❓ Задать вопрос"), KeyboardButton(text="ℹ️ Информация")]
+            [KeyboardButton(text="🏠 Меню"), KeyboardButton(text="ℹ️ Информация")]
         ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_user_inline_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Подать заявку", callback_data="open_apply")],
+        [InlineKeyboardButton(text="💸 Поставить выплату", callback_data="open_payout")],
+        [InlineKeyboardButton(text="❓ Задать вопрос", callback_data="open_question")],
+        [InlineKeyboardButton(text="💰 Получить выплату", callback_data="request_payout")]
+    ])
 
 def get_cancel_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -164,13 +171,12 @@ async def close_panel(callback: CallbackQuery):
 async def cancel_action_handler(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("🚫 <b>Действие отменено.</b>", parse_mode="HTML")
-    await callback.message.answer("Главное меню:", reply_markup=get_main_kb(callback.from_user.id))
     await callback.answer("Отменено 🚫")
 
 # --- МЕНЮ КОМАНД ---
 async def setup_bot_commands(bot: Bot):
     commands = [
-        BotCommand(command="start", description="Обновить бота"),
+        BotCommand(command="start", description="Главное меню"),
         BotCommand(command="help", description="Задать вопрос")
     ]
     await bot.set_my_commands(commands)
@@ -180,14 +186,83 @@ async def setup_bot_commands(bot: Bot):
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-    photo_url = "https://i.postimg.cc/QtcPXGD9/Leonardo-Phoenix-Create-a-stylish-logo-in-a-futuristic-oneofak-0-(1).jpg" 
-    
+    photo_url = "https://i.postimg.cc/5t7VGdMM/2147483648-231862.jpg"
+
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("👇", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏠 Меню"), KeyboardButton(text="ℹ️ Информация")]], resize_keyboard=True))
+        await message.answer_photo(
+            photo=photo_url,
+            caption="<b>Добро пожаловать в SAGE!</b>\nЭтот бот — твой помощник, здесь есть всё что тебе нужно!\n\nВыбирай действие в меню ниже 👇",
+            reply_markup=get_user_inline_kb(),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer_photo(
+            photo=photo_url,
+            caption="<b>Добро пожаловать в SAGE!</b>\nЭтот бот — твой помощник, здесь есть всё что тебе нужно!\n\nВыбирай действие в меню ниже 👇",
+            reply_markup=get_main_kb(message.from_user.id),
+            parse_mode="HTML"
+        )
+
+# --- МЕНЮ ДЛЯ ЮЗЕРОВ ---
+@dp.message(F.text == "🏠 Меню")
+async def menu_handler(message: Message, state: FSMContext):
+    await state.clear()
     await message.answer_photo(
-        photo=photo_url,
-        caption="<b>Добро пожаловать в бот крутого Максима!</b>\n\nВыбери нужное действие в меню ниже 👇",
-        reply_markup=get_main_kb(message.from_user.id),
+        photo="https://i.postimg.cc/5t7VGdMM/2147483648-231862.jpg",
+        caption="<b>Добро пожаловать в SAGE!</b>\nЭтот бот — твой помощник, здесь есть всё что тебе нужно!\n\nВыбирай действие в меню ниже 👇",
+        reply_markup=get_user_inline_kb(),
         parse_mode="HTML"
     )
+
+@dp.message(F.text == "ℹ️ Информация")
+async def handle_info(message: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_panel")]])
+    await message.answer("<b>Бот агентства SAGE.</b>\nЗдесь ты можешь записаться на баттл, оформить ДР, поставить выплату и задать вопрос команде.", reply_markup=kb, parse_mode="HTML")
+
+# --- ИНЛАЙН КНОПКИ ЮЗЕРОВ ---
+@dp.callback_query(F.data == "open_apply")
+async def open_apply(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚔️ Заявка на батл", callback_data="apply_battle")],
+        [InlineKeyboardButton(text="🎂 Заявка на День Рождения", callback_data="apply_bday")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel")]
+    ])
+    await callback.message.answer("<b>Выбери, какую заявку хочешь подать:</b>", reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data == "open_payout")
+async def open_payout(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="25$", callback_data="payout_25"),
+         InlineKeyboardButton(text="50$", callback_data="payout_50")],
+        [InlineKeyboardButton(text="75$", callback_data="payout_75"),
+         InlineKeyboardButton(text="100$", callback_data="payout_100")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel")]
+    ])
+    await callback.message.answer("<b>Выбери сумму для вывода:</b>", reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data == "open_question")
+async def open_question(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("<b>Напиши свой вопрос:</b>", reply_markup=get_cancel_kb(), parse_mode="HTML")
+    await state.set_state(Form.waiting_for_question)
+    await callback.answer()
+
+@dp.callback_query(F.data == "request_payout")
+async def request_payout(callback: CallbackQuery):
+    report = (
+        f"💰 <b>ЗАПРОС НА ПОЛУЧЕНИЕ ВЫПЛАТЫ!</b>\n\n"
+        f"👤 От: <a href='tg://user?id={callback.from_user.id}'>{callback.from_user.full_name}</a>\n"
+        f"USER_ID:<code>{callback.from_user.id}</code>"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, report, parse_mode="HTML")
+        except Exception:
+            pass
+    await callback.message.answer("✅ <b>Запрос отправлен! Ожидай выплаты.</b>", parse_mode="HTML")
+    await callback.answer()
 
 # --- АДМИН ПАНЕЛЬ: ДАШБОРД ---
 @dp.message(F.text == "⚙️ Панель управления", F.from_user.id.in_(ADMIN_IDS))
@@ -197,12 +272,12 @@ async def admin_dashboard(message: Message):
     bdays = await get_bdays()
     questions = await get_all_questions()
     payouts = await get_payouts()
-    
+
     b_ind = "🔴" if len(battles) > 0 else "🟢"
     bd_ind = "🔴" if len(bdays) > 0 else "🟢"
     q_ind = "🔴" if len(questions) > 0 else "🟢"
     p_ind = "🔴" if len(payouts) > 0 else "🟢"
-    
+
     text = (
         "🎛 <b>ГЛАВНАЯ ПАНЕЛЬ АДМИНИСТРАТОРА</b>\n"
         "────────────────────\n"
@@ -216,21 +291,12 @@ async def admin_dashboard(message: Message):
     )
     await message.answer(text, parse_mode="HTML")
 
-# --- ПОДАЧА ЗАЯВКИ (БАТТЛ / ДР) ---
-@dp.message(F.text == "📝 Подать заявку")
-async def apply_start(message: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚔️ Заявка на батл", callback_data="apply_battle")],
-        [InlineKeyboardButton(text="🎂 Заявка на День Рождения", callback_data="apply_bday")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel")]
-    ])
-    await message.answer("<b>Выбери, какую заявку хочешь подать:</b>", reply_markup=kb, parse_mode="HTML")
-
-# -- ЛОГИКА БАТТЛА --
+# --- ПОДАЧА ЗАЯВКИ: БАТТЛ ---
 @dp.callback_query(F.data == "apply_battle")
 async def battle_start_cb(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("<b>Шаг 1:</b> Напиши дату баттла.", reply_markup=get_cancel_kb(), parse_mode="HTML")
+    await callback.message.answer("<b>Шаг 1:</b> Напиши дату баттла.", reply_markup=get_cancel_kb(), parse_mode="HTML")
     await state.set_state(BattleReg.waiting_for_date)
+    await callback.answer()
 
 @dp.message(BattleReg.waiting_for_date)
 async def battle_date(message: Message, state: FSMContext):
@@ -254,7 +320,7 @@ async def battle_prefs(message: Message, state: FSMContext):
 async def battle_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     photo_id = message.photo[-1].file_id
-    
+
     report = (
         f"🔥 <b>НОВАЯ ЗАЯВКА НА БАТТЛ!</b>\n\n"
         f"<blockquote>👤 От: <a href='tg://user?id={message.from_user.id}'>{message.from_user.full_name}</a>\n"
@@ -263,25 +329,21 @@ async def battle_photo(message: Message, state: FSMContext):
         f"🌍 Страны: {data['prefs']}</blockquote>\n\n"
         f"USER_ID:<code>{message.from_user.id}</code>"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять заявку", callback_data="accept_battle")]])
-    
-    # Отправляем уведомление всем админам
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять заявку", callback_data=f"accept_battle_{message.from_user.id}")]])
+
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_photo(admin_id, photo=photo_id, caption=report, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
-            
-    await message.answer("✅ <b>Заявка отправлена!</b>", reply_markup=get_main_kb(message.from_user.id), parse_mode="HTML")
+
+    await message.answer("✅ <b>Заявка отправлена!</b>", parse_mode="HTML")
     await state.clear()
 
-@dp.callback_query(F.data == "accept_battle", F.from_user.id.in_(ADMIN_IDS))
+@dp.callback_query(F.data.startswith("accept_battle_"), F.from_user.id.in_(ADMIN_IDS))
 async def process_accept_battle(callback: CallbackQuery):
+    user_id = int(callback.data.split("_")[2])
     text = callback.message.caption
-    user_id_match = re.search(r'USER_ID:<code>(\d+)</code>', text) or re.search(r'USER_ID:(\d+)', text)
-    if not user_id_match: return await callback.answer("Ошибка: ID не найден", show_alert=True)
-        
-    user_id = int(user_id_match.group(1))
     date_match = re.search(r'📅 Дата: (.*)', text)
     time_match = re.search(r'⏰ Время: (.*)', text)
     date_str = date_match.group(1).strip() if date_match else "Не указана"
@@ -289,16 +351,17 @@ async def process_accept_battle(callback: CallbackQuery):
 
     await add_battle(user_id, date_str, time_str)
     await bot.send_message(user_id, "✅ <b>Заявка на баттл принята</b>, ожидайте подробности.", parse_mode="HTML")
-    
+
     new_caption = text.replace("🔥 <b>НОВАЯ ЗАЯВКА НА БАТТЛ!</b>", "✅ <b>БАТТЛ ПРИНЯТ И ДОБАВЛЕН В СПИСОК</b>")
     await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
     await callback.answer("Одобрено ✅")
 
-# -- ЛОГИКА ДНЯ РОЖДЕНИЯ --
+# --- ПОДАЧА ЗАЯВКИ: ДЕНЬ РОЖДЕНИЯ ---
 @dp.callback_query(F.data == "apply_bday")
 async def bday_start_cb(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("<b>Шаг 1:</b> Напиши свой ник в приложении Super Live.", reply_markup=get_cancel_kb(), parse_mode="HTML")
+    await callback.message.answer("<b>Шаг 1:</b> Напиши свой ник в приложении Super Live.", reply_markup=get_cancel_kb(), parse_mode="HTML")
     await state.set_state(BdayReg.waiting_for_nick)
+    await callback.answer()
 
 @dp.message(BdayReg.waiting_for_nick)
 async def bday_nick(message: Message, state: FSMContext):
@@ -315,14 +378,14 @@ async def bday_id(message: Message, state: FSMContext):
 @dp.message(BdayReg.waiting_for_date)
 async def bday_date(message: Message, state: FSMContext):
     await state.update_data(date=message.text)
-    await message.answer("<b>Шаг 4:</b> Отправь <b>одно лучшее фото</b> для баннера (если нужно несколько — сделай коллаж и отправь одной картинкой).", reply_markup=get_cancel_kb(), parse_mode="HTML")
+    await message.answer("<b>Шаг 4:</b> Отправь <b>одно лучшее фото</b> для баннера.", reply_markup=get_cancel_kb(), parse_mode="HTML")
     await state.set_state(BdayReg.waiting_for_photo)
 
 @dp.message(BdayReg.waiting_for_photo, F.photo)
 async def bday_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     photo_id = message.photo[-1].file_id
-    
+
     report = (
         f"🎂 <b>НОВАЯ ЗАЯВКА НА ДЕНЬ РОЖДЕНИЯ!</b>\n\n"
         f"<blockquote>👤 От: <a href='tg://user?id={message.from_user.id}'>{message.from_user.full_name}</a>\n"
@@ -331,24 +394,21 @@ async def bday_photo(message: Message, state: FSMContext):
         f"📅 Дата: {data['date']}</blockquote>\n\n"
         f"USER_ID:<code>{message.from_user.id}</code>"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять ДР", callback_data="accept_bday")]])
-    
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять ДР", callback_data=f"accept_bday_{message.from_user.id}")]])
+
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_photo(admin_id, photo=photo_id, caption=report, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
-            
-    await message.answer("✅ <b>Заявка на День Рождения отправлена!</b>", reply_markup=get_main_kb(message.from_user.id), parse_mode="HTML")
+
+    await message.answer("✅ <b>Заявка на День Рождения отправлена!</b>", parse_mode="HTML")
     await state.clear()
 
-@dp.callback_query(F.data == "accept_bday", F.from_user.id.in_(ADMIN_IDS))
+@dp.callback_query(F.data.startswith("accept_bday_"), F.from_user.id.in_(ADMIN_IDS))
 async def process_accept_bday(callback: CallbackQuery):
+    user_id = int(callback.data.split("_")[2])
     text = callback.message.caption
-    user_id_match = re.search(r'USER_ID:<code>(\d+)</code>', text) or re.search(r'USER_ID:(\d+)', text)
-    if not user_id_match: return await callback.answer("Ошибка: ID не найден", show_alert=True)
-        
-    user_id = int(user_id_match.group(1))
     nick_match = re.search(r'🎭 Ник: (.*)', text)
     id_match = re.search(r'🆔 ID: <code>(.*)</code>', text)
     date_match = re.search(r'📅 Дата: (.*)', text)
@@ -359,30 +419,19 @@ async def process_accept_bday(callback: CallbackQuery):
 
     await add_bday(user_id, nick_str, id_str, date_str)
     await bot.send_message(user_id, "✅ <b>Твоя заявка на День Рождения одобрена!</b>", parse_mode="HTML")
-    
+
     new_caption = text.replace("🎂 <b>НОВАЯ ЗАЯВКА НА ДЕНЬ РОЖДЕНИЯ!</b>", "✅ <b>ДР ПРИНЯТ И ДОБАВЛЕН В СПИСОК</b>")
     await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
     await callback.answer("Одобрено ✅")
 
-# --- ВЫПЛАТЫ (ЮЗЕРЫ) ---
-@dp.message(F.text == "💸 Поставить выплату")
-async def payout_start(message: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="25$", callback_data="payout_25"),
-         InlineKeyboardButton(text="50$", callback_data="payout_50")],
-        [InlineKeyboardButton(text="75$", callback_data="payout_75"),
-         InlineKeyboardButton(text="100$", callback_data="payout_100")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel")]
-    ])
-    await message.answer("<b>Выбери сумму для вывода:</b>", reply_markup=kb, parse_mode="HTML")
-
+# --- ВЫПЛАТЫ ---
 @dp.callback_query(F.data.startswith("payout_"))
 async def process_payout(callback: CallbackQuery):
     amount = int(callback.data.split("_")[1])
     await add_payout(callback.from_user.id, amount)
-    
+
     await callback.message.edit_text(f"✅ Заявка на вывод <b>{amount}$</b> успешно создана! Ожидай перевода.", parse_mode="HTML")
-    
+
     report = (
         f"💰 <b>НОВАЯ ЗАЯВКА НА ВЫВОД!</b>\n\n"
         f"👤 От: <a href='tg://user?id={callback.from_user.id}'>{callback.from_user.full_name}</a>\n"
@@ -394,7 +443,7 @@ async def process_payout(callback: CallbackQuery):
             await bot.send_message(admin_id, report, parse_mode="HTML")
         except Exception:
             pass
-            
+
     await callback.answer("Заявка улетела админу 💸")
 
 # --- АДМИН ПАНЕЛЬ: СПИСКИ ---
@@ -510,7 +559,7 @@ async def process_del_bday(callback: CallbackQuery):
 async def send_question_page(message_or_callback, page: int):
     qs = await get_all_questions()
     markup_close = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel")]])
-    
+
     if not qs:
         text = "<b>База вопросов пуста. Все отвечено.</b>"
         if isinstance(message_or_callback, Message): await message_or_callback.answer(text, reply_markup=markup_close, parse_mode="HTML")
@@ -592,7 +641,6 @@ async def perform_broadcast(message: Message, state: FSMContext):
 
 # --- ВОПРОСЫ И ОТВЕТЫ ---
 @dp.message(Command("help"))
-@dp.message(F.text == "❓ Задать вопрос")
 async def ask_question_start(message: Message, state: FSMContext):
     await message.answer("<b>Напиши свой вопрос:</b>", reply_markup=get_cancel_kb(), parse_mode="HTML")
     await state.set_state(Form.waiting_for_question)
@@ -600,15 +648,15 @@ async def ask_question_start(message: Message, state: FSMContext):
 @dp.message(Form.waiting_for_question)
 async def process_question(message: Message, state: FSMContext):
     q_id = await add_question(message.from_user.id, message.from_user.full_name, message.text)
-    
+
     report = f"📩 <b>НОВЫЙ ВОПРОС!</b>\n\nUSER_ID:<code>{message.from_user.id}</code> | Q_ID:<code>{q_id}</code>\n👤 От: <a href='tg://user?id={message.from_user.id}'>{message.from_user.full_name}</a>\n\n<blockquote>{message.text}</blockquote>"
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(admin_id, report, parse_mode="HTML")
         except Exception:
             pass
-            
-    await message.answer("✅ <b>Отправлено!</b>", reply_markup=get_main_kb(message.from_user.id), parse_mode="HTML")
+
+    await message.answer("✅ <b>Отправлено!</b>", parse_mode="HTML")
     await state.clear()
 
 @dp.message(F.reply_to_message & F.from_user.id.in_(ADMIN_IDS))
@@ -625,16 +673,11 @@ async def admin_reply(message: Message):
                 await message.answer("✅ <b>Ответ отправлен, вопрос удален из базы.</b>", parse_mode="HTML")
             else: await message.answer("✅ <b>Отправлено!</b>", parse_mode="HTML")
 
-@dp.message(F.text == "ℹ️ Информация")
-async def handle_info(message: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="close_panel")]])
-    await message.answer("<b>Бот для записи на баттлы и связи с администрацией.</b>", reply_markup=kb, parse_mode="HTML")
-
 async def main():
     logging.basicConfig(level=logging.INFO)
     await init_db()
     await setup_bot_commands(bot)
-    print("Бот обновлен: добавлена поддержка нескольких админов!")
+    print("Бот запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
