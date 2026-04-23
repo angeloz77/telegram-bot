@@ -3,10 +3,9 @@ import logging
 import aiosqlite
 import re
 import os
-import time
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand, InputMediaPhoto
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -22,7 +21,6 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 album_buffer = {}
-last_menu_sent = {}
 
 class Form(StatesGroup):
     waiting_for_question = State()
@@ -33,6 +31,7 @@ class BattleReg(StatesGroup):
     waiting_for_prefs = State()
     waiting_for_photos = State()
     waiting_for_sl_id = State()
+    reviewing = State()
 
 class BattleEdit(StatesGroup):
     editing_date = State()
@@ -46,6 +45,7 @@ class BdayReg(StatesGroup):
     waiting_for_id = State()
     waiting_for_date = State()
     waiting_for_photo = State()
+    reviewing = State()
 
 class BdayEdit(StatesGroup):
     editing_nick = State()
@@ -230,6 +230,7 @@ async def send_battle_summary(target, state: FSMContext):
         f"🆔 SuperLive ID: <b>{data.get('sl_id', '—')}</b>\n\n"
         "Всё верно? 👇"
     )
+    await state.set_state(BattleReg.reviewing)
     if isinstance(target, Message):
         await target.answer(text, reply_markup=get_battle_summary_kb(), parse_mode="HTML")
     else:
@@ -247,18 +248,15 @@ async def send_bday_summary(target, state: FSMContext):
         f"📸 Фото: <b>{photo_status}</b>\n\n"
         "Всё верно? 👇"
     )
+    await state.set_state(BdayReg.reviewing)
     if isinstance(target, Message):
         await target.answer(text, reply_markup=get_bday_summary_kb(), parse_mode="HTML")
     else:
         await target.message.answer(text, reply_markup=get_bday_summary_kb(), parse_mode="HTML")
         await target.answer()
 
-# --- ХЕЛПЕР: отправить главное меню ---
+# --- ХЕЛПЕР: главное меню ---
 async def send_main_menu(user_id: int, chat_id: int):
-    now = time.time()
-    if last_menu_sent.get(user_id, 0) > now - 2:
-        return
-    last_menu_sent[user_id] = now
     await bot.send_photo(
         chat_id=chat_id,
         photo="https://i.postimg.cc/5t7VGdMM/2147483648-231862.jpg",
@@ -270,7 +268,10 @@ async def send_main_menu(user_id: int, chat_id: int):
 # --- ОБЩИЕ КОЛЛБЕКИ ---
 @dp.callback_query(F.data == "close_panel")
 async def close_panel(callback: CallbackQuery):
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await callback.answer()
 
 @dp.callback_query(F.data == "cancel_action")
@@ -428,6 +429,7 @@ async def battle_start_cb(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "battle_continue")
 async def battle_step1(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await callback.message.answer("📅 <b>Шаг 1:</b> Напиши диапазон дат\n\nФормат: <code>1.01 - 5.01</code>", reply_markup=get_cancel_kb(), parse_mode="HTML")
     await state.set_state(BattleReg.waiting_for_date)
     await callback.answer()
@@ -447,7 +449,12 @@ async def battle_time(message: Message, state: FSMContext):
         await message.answer("❌ <b>Некорректный формат времени!</b>\n\nУкажи диапазон в формате: <code>20:00 - 23:00</code>", reply_markup=get_cancel_kb(), parse_mode="HTML")
         return
     await state.update_data(time=message.text.strip())
-    await message.answer("🌍 <b>Шаг 3:</b> Укажи нежелательные страны\n\nНапример: <code>Индия</code>\n\nЕсли ограничений нет — напиши <code>нет</code>", reply_markup=get_cancel_kb(), parse_mode="HTML")
+    await message.answer(
+        "🌍 <b>Шаг 3:</b> Укажи нежелательные страны (исключаются при подборе соперницы)\n\n"
+        "Например: <code>Индия</code>\n\n"
+        "Если ограничений нет и ты готова к любой сопернице — напиши <code>нет</code>",
+        reply_markup=get_cancel_kb(), parse_mode="HTML"
+    )
     await state.set_state(BattleReg.waiting_for_prefs)
 
 @dp.message(BattleReg.waiting_for_prefs)
@@ -469,9 +476,16 @@ async def battle_photos(message: Message, state: FSMContext):
         await message.answer("🆔 <b>Шаг 5:</b> Напиши свой ID в SuperLive", reply_markup=get_cancel_kb(), parse_mode="HTML")
         await state.set_state(BattleReg.waiting_for_sl_id)
 
+@dp.message(BattleReg.waiting_for_photos, ~F.photo)
+async def battle_photos_wrong(message: Message, state: FSMContext):
+    await message.answer("📸 Пожалуйста, отправь <b>фото</b> (одно или альбомом). Текст и файлы не принимаются.", reply_markup=get_cancel_kb(), parse_mode="HTML")
+
 async def process_battle_album(message: Message, state: FSMContext, media_group_id: str, edit_mode: bool = False):
     await asyncio.sleep(1.5)
     photos = album_buffer.pop(media_group_id, [])
+    current_state = await state.get_state()
+    if current_state is None:
+        return
     await state.update_data(photos=photos)
     if edit_mode:
         await message.answer(f"📸 Фото обновлены! Загружено: <b>{len(photos)} шт.</b>", reply_markup=get_confirm_edit_kb("battle"), parse_mode="HTML")
@@ -490,7 +504,8 @@ async def battle_to_summary(callback: CallbackQuery, state: FSMContext):
     await send_battle_summary(callback, state)
 
 @dp.callback_query(F.data == "battle_fix")
-async def battle_fix(callback: CallbackQuery):
+async def battle_fix(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BattleReg.reviewing)
     await callback.message.answer("✏️ <b>Что хочешь исправить?</b>", reply_markup=get_battle_fix_kb(), parse_mode="HTML")
     await callback.answer()
 
@@ -506,6 +521,7 @@ async def battle_edit_date_input(message: Message, state: FSMContext):
         await message.answer("❌ <b>Некорректный формат!</b>\n\nФормат: <code>1.01 - 5.01</code>", reply_markup=get_cancel_kb(), parse_mode="HTML")
         return
     await state.update_data(date=message.text.strip())
+    await state.set_state(BattleReg.reviewing)
     await message.answer(f"✅ Дата обновлена: <b>{message.text.strip()}</b>", reply_markup=get_confirm_edit_kb("battle"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "battle_edit_time")
@@ -520,6 +536,7 @@ async def battle_edit_time_input(message: Message, state: FSMContext):
         await message.answer("❌ <b>Некорректный формат!</b>\n\nФормат: <code>20:00 - 23:00</code>", reply_markup=get_cancel_kb(), parse_mode="HTML")
         return
     await state.update_data(time=message.text.strip())
+    await state.set_state(BattleReg.reviewing)
     await message.answer(f"✅ Время обновлено: <b>{message.text.strip()}</b>", reply_markup=get_confirm_edit_kb("battle"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "battle_edit_prefs")
@@ -531,6 +548,7 @@ async def battle_edit_prefs(callback: CallbackQuery, state: FSMContext):
 @dp.message(BattleEdit.editing_prefs)
 async def battle_edit_prefs_input(message: Message, state: FSMContext):
     await state.update_data(prefs=message.text)
+    await state.set_state(BattleReg.reviewing)
     await message.answer(f"✅ Страны обновлены: <b>{message.text}</b>", reply_markup=get_confirm_edit_kb("battle"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "battle_edit_photos")
@@ -545,11 +563,26 @@ async def battle_edit_photos_input(message: Message, state: FSMContext):
     if media_group_id:
         if media_group_id not in album_buffer:
             album_buffer[media_group_id] = []
-            asyncio.create_task(process_battle_album(message, state, media_group_id, edit_mode=True))
+            asyncio.create_task(process_battle_album_edit(message, state, media_group_id))
         album_buffer[media_group_id].append(message.photo[-1].file_id)
     else:
         await state.update_data(photos=[message.photo[-1].file_id])
+        await state.set_state(BattleReg.reviewing)
         await message.answer("✅ Фото обновлено: <b>1 шт.</b>", reply_markup=get_confirm_edit_kb("battle"), parse_mode="HTML")
+
+@dp.message(BattleEdit.editing_photos, ~F.photo)
+async def battle_edit_photos_wrong(message: Message, state: FSMContext):
+    await message.answer("📸 Пожалуйста, отправь <b>фото</b> (одно или альбомом).", reply_markup=get_cancel_kb(), parse_mode="HTML")
+
+async def process_battle_album_edit(message: Message, state: FSMContext, media_group_id: str):
+    await asyncio.sleep(1.5)
+    photos = album_buffer.pop(media_group_id, [])
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    await state.update_data(photos=photos)
+    await state.set_state(BattleReg.reviewing)
+    await message.answer(f"📸 Фото обновлены! Загружено: <b>{len(photos)} шт.</b>", reply_markup=get_confirm_edit_kb("battle"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "battle_edit_sl_id")
 async def battle_edit_sl_id(callback: CallbackQuery, state: FSMContext):
@@ -560,6 +593,7 @@ async def battle_edit_sl_id(callback: CallbackQuery, state: FSMContext):
 @dp.message(BattleEdit.editing_sl_id)
 async def battle_edit_sl_id_input(message: Message, state: FSMContext):
     await state.update_data(sl_id=message.text)
+    await state.set_state(BattleReg.reviewing)
     await message.answer(f"✅ SuperLive ID обновлён: <b>{message.text}</b>", reply_markup=get_confirm_edit_kb("battle"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "battle_confirm")
@@ -581,12 +615,13 @@ async def battle_confirm(callback: CallbackQuery, state: FSMContext):
             if len(photos) == 1:
                 await bot.send_photo(admin_id, photo=photos[0], caption=report, reply_markup=kb, parse_mode="HTML")
             elif len(photos) > 1:
-                from aiogram.types import InputMediaPhoto
                 media = [InputMediaPhoto(media=photos[0], caption=report, parse_mode="HTML")]
                 for photo_id in photos[1:]:
                     media.append(InputMediaPhoto(media=photo_id))
                 await bot.send_media_group(admin_id, media=media)
                 await bot.send_message(admin_id, f"👆 Заявка от <a href='tg://user?id={callback.from_user.id}'>{callback.from_user.full_name}</a>", reply_markup=kb, parse_mode="HTML")
+            else:
+                await bot.send_message(admin_id, report, reply_markup=kb, parse_mode="HTML")
         except Exception as e:
             logging.warning(f"Ошибка отправки: {e}")
     await state.clear()
@@ -596,14 +631,14 @@ async def battle_confirm(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("accept_battle_"), F.from_user.id.in_(ADMIN_IDS))
 async def process_accept_battle(callback: CallbackQuery):
     user_id = int(callback.data.split("_")[2])
-    text = callback.message.caption or callback.message.text
+    text = callback.message.caption or callback.message.text or ""
     date_match = re.search(r'📅 Дата: (.*)', text)
     time_match = re.search(r'⏰ Время: (.*)', text)
     date_str = date_match.group(1).strip() if date_match else "Не указана"
     time_str = time_match.group(1).strip() if time_match else "Не указано"
     await add_battle(user_id, date_str, time_str)
     await bot.send_message(user_id, "✅ <b>Заявка на баттл принята!</b> Ожидай подробности.", parse_mode="HTML")
-    new_text = (text or "").replace("🔥 <b>НОВАЯ ЗАЯВКА НА БАТТЛ!</b>", "✅ <b>БАТТЛ ПРИНЯТ И ДОБАВЛЕН В СПИСОК</b>")
+    new_text = text.replace("🔥 <b>НОВАЯ ЗАЯВКА НА БАТТЛ!</b>", "✅ <b>БАТТЛ ПРИНЯТ И ДОБАВЛЕН В СПИСОК</b>")
     try:
         if callback.message.caption:
             await callback.message.edit_caption(caption=new_text, reply_markup=None, parse_mode="HTML")
@@ -617,6 +652,7 @@ async def process_accept_battle(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "apply_bday")
 async def bday_start_cb(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await callback.message.answer("🎭 <b>Шаг 1:</b> Напиши свой ник в приложении Super Live.", reply_markup=get_cancel_kb(), parse_mode="HTML")
     await state.set_state(BdayReg.waiting_for_nick)
     await callback.answer()
@@ -644,13 +680,18 @@ async def bday_photo(message: Message, state: FSMContext):
     await state.update_data(photo_id=message.photo[-1].file_id)
     await send_bday_summary(message, state)
 
+@dp.message(BdayReg.waiting_for_photo, ~F.photo)
+async def bday_photo_wrong(message: Message, state: FSMContext):
+    await message.answer("📸 Пожалуйста, отправь <b>фото</b>. Текст и файлы не принимаются.", reply_markup=get_cancel_kb(), parse_mode="HTML")
+
 # --- ДР: СВОДКА И ПОДТВЕРЖДЕНИЕ ---
 @dp.callback_query(F.data == "bday_to_summary")
 async def bday_to_summary(callback: CallbackQuery, state: FSMContext):
     await send_bday_summary(callback, state)
 
 @dp.callback_query(F.data == "bday_fix")
-async def bday_fix(callback: CallbackQuery):
+async def bday_fix(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BdayReg.reviewing)
     await callback.message.answer("✏️ <b>Что хочешь исправить?</b>", reply_markup=get_bday_fix_kb(), parse_mode="HTML")
     await callback.answer()
 
@@ -663,6 +704,7 @@ async def bday_edit_nick(callback: CallbackQuery, state: FSMContext):
 @dp.message(BdayEdit.editing_nick)
 async def bday_edit_nick_input(message: Message, state: FSMContext):
     await state.update_data(nick=message.text)
+    await state.set_state(BdayReg.reviewing)
     await message.answer(f"✅ Ник обновлён: <b>{message.text}</b>", reply_markup=get_confirm_edit_kb("bday"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bday_edit_id")
@@ -674,6 +716,7 @@ async def bday_edit_id(callback: CallbackQuery, state: FSMContext):
 @dp.message(BdayEdit.editing_id)
 async def bday_edit_id_input(message: Message, state: FSMContext):
     await state.update_data(sl_id=message.text)
+    await state.set_state(BdayReg.reviewing)
     await message.answer(f"✅ ID обновлён: <b>{message.text}</b>", reply_markup=get_confirm_edit_kb("bday"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bday_edit_date")
@@ -685,6 +728,7 @@ async def bday_edit_date(callback: CallbackQuery, state: FSMContext):
 @dp.message(BdayEdit.editing_date)
 async def bday_edit_date_input(message: Message, state: FSMContext):
     await state.update_data(date=message.text)
+    await state.set_state(BdayReg.reviewing)
     await message.answer(f"✅ Дата обновлена: <b>{message.text}</b>", reply_markup=get_confirm_edit_kb("bday"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bday_edit_photo")
@@ -696,7 +740,12 @@ async def bday_edit_photo(callback: CallbackQuery, state: FSMContext):
 @dp.message(BdayEdit.editing_photo, F.photo)
 async def bday_edit_photo_input(message: Message, state: FSMContext):
     await state.update_data(photo_id=message.photo[-1].file_id)
+    await state.set_state(BdayReg.reviewing)
     await message.answer("✅ Фото обновлено!", reply_markup=get_confirm_edit_kb("bday"), parse_mode="HTML")
+
+@dp.message(BdayEdit.editing_photo, ~F.photo)
+async def bday_edit_photo_wrong(message: Message, state: FSMContext):
+    await message.answer("📸 Пожалуйста, отправь <b>фото</b>.", reply_markup=get_cancel_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bday_confirm")
 async def bday_confirm(callback: CallbackQuery, state: FSMContext):
@@ -726,7 +775,7 @@ async def bday_confirm(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("accept_bday_"), F.from_user.id.in_(ADMIN_IDS))
 async def process_accept_bday(callback: CallbackQuery):
     user_id = int(callback.data.split("_")[2])
-    text = callback.message.caption
+    text = callback.message.caption or callback.message.text or ""
     nick_match = re.search(r'🎭 Ник: (.*)', text)
     id_match = re.search(r'🆔 ID: <code>(.*)</code>', text)
     date_match = re.search(r'📅 Дата: (.*)', text)
@@ -735,8 +784,14 @@ async def process_accept_bday(callback: CallbackQuery):
     date_str = date_match.group(1).strip() if date_match else "Не указана"
     await add_bday(user_id, nick_str, id_str, date_str)
     await bot.send_message(user_id, "✅ <b>Твоя заявка на День Рождения одобрена!</b>", parse_mode="HTML")
-    new_caption = text.replace("🎂 <b>НОВАЯ ЗАЯВКА НА ДЕНЬ РОЖДЕНИЯ!</b>", "✅ <b>ДР ПРИНЯТ И ДОБАВЛЕН В СПИСОК</b>")
-    await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
+    new_text = text.replace("🎂 <b>НОВАЯ ЗАЯВКА НА ДЕНЬ РОЖДЕНИЯ!</b>", "✅ <b>ДР ПРИНЯТ И ДОБАВЛЕН В СПИСОК</b>")
+    try:
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=new_text, reply_markup=None, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(new_text, reply_markup=None, parse_mode="HTML")
+    except Exception:
+        pass
     await callback.answer("Одобрено ✅")
 
 # --- СПИСКИ АДМИНА ---
