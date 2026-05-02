@@ -191,12 +191,14 @@ async def delete_question(q_id: int):
         await db.execute('DELETE FROM questions WHERE id=?', (q_id,))
         await db.commit()
 
-async def add_payout(user_id: int):
+async def add_payout(user_id: int) -> int:
+    # [3] возвращаем ID чтобы использовать в инлайн кнопке уведомления
     ts = datetime.now().strftime('%H:%M, %d.%m.%Y')
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('INSERT INTO payouts (user_id, amount, status, created_at) VALUES (?,0,0,?)',
-                         (user_id, ts))
+        cur = await db.execute('INSERT INTO payouts (user_id, amount, status, created_at) VALUES (?,0,0,?)',
+                               (user_id, ts))
         await db.commit()
+        return cur.lastrowid
 
 async def get_pending_payouts():
     async with aiosqlite.connect(DB_NAME) as db:
@@ -229,6 +231,29 @@ async def delete_payout(p_id: int):
         await db.execute('DELETE FROM payouts WHERE id=?', (p_id,))
         await db.commit()
 
+# [1] Новые функции для раздела «История»
+async def get_user_battles(user_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            'SELECT date, time FROM active_battles WHERE user_id=?', (user_id,)
+        ) as cur:
+            return await cur.fetchall()
+
+async def get_user_bdays(user_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            'SELECT nick, sl_id, date FROM active_bdays WHERE user_id=?', (user_id,)
+        ) as cur:
+            return await cur.fetchall()
+
+async def get_user_payouts(user_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            'SELECT id, status, created_at, confirmed_at FROM payouts WHERE user_id=? ORDER BY id DESC',
+            (user_id,)
+        ) as cur:
+            return await cur.fetchall()
+
 # ========== ВАЛИДАЦИЯ ==========
 
 def validate_date(text: str) -> bool:
@@ -241,11 +266,12 @@ def validate_time(text: str) -> bool:
 
 def get_main_kb(user_id):
     if user_id in ADMIN_IDS:
+        # [2] Первые 2 кнопки после панели управления — выводы/выплаты и база вопросов
         buttons = [
             [KeyboardButton(text="⚙️ Панель управления")],
+            [KeyboardButton(text="💰 Выводы/выплаты"), KeyboardButton(text="❓ База вопросов")],
             [KeyboardButton(text="📋 Список баттлов"), KeyboardButton(text="🎂 Список ДР")],
-            [KeyboardButton(text="❓ База вопросов"), KeyboardButton(text="💰 Выводы/выплаты")],
-            [KeyboardButton(text="📊 База данных"),   KeyboardButton(text="📢 Рассылка")]
+            [KeyboardButton(text="📊 База данных"),    KeyboardButton(text="📢 Рассылка")]
         ]
     else:
         buttons = [
@@ -291,11 +317,11 @@ def get_bday_summary_kb():
 
 def get_bday_fix_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎭 Ник",           callback_data="bday_edit_nick")],
-        [InlineKeyboardButton(text="🆔 SuperLive ID",  callback_data="bday_edit_id")],
-        [InlineKeyboardButton(text="📅 Дата",          callback_data="bday_edit_date")],
-        [InlineKeyboardButton(text="📸 Фото",          callback_data="bday_edit_photo")],
-        [InlineKeyboardButton(text="🔙 Назад к сводке",callback_data="bday_to_summary")]
+        [InlineKeyboardButton(text="🎭 Ник",            callback_data="bday_edit_nick")],
+        [InlineKeyboardButton(text="🆔 SuperLive ID",   callback_data="bday_edit_id")],
+        [InlineKeyboardButton(text="📅 Дата",           callback_data="bday_edit_date")],
+        [InlineKeyboardButton(text="📸 Фото",           callback_data="bday_edit_photo")],
+        [InlineKeyboardButton(text="🔙 Назад к сводке", callback_data="bday_to_summary")]
     ])
 
 def get_confirm_edit_kb(target: str):
@@ -665,10 +691,52 @@ async def menu_handler(message: Message, state: FSMContext):
         parse_mode="HTML"
     )
 
+# [1] Раздел «История» — полноценная реализация
 @dp.message(F.text == "📜 История")
 async def history_handler(message: Message):
+    user_id = message.from_user.id
+    battles  = await get_user_battles(user_id)
+    bdays    = await get_user_bdays(user_id)
+    payouts  = await get_user_payouts(user_id)
+
+    has_anything = battles or bdays or payouts
+
+    if not has_anything:
+        await message.answer(
+            "📜 <b>История</b>\n"
+            "────────────────\n\n"
+            "У тебя пока нет активных заявок или выплат.\n\n"
+            "<i>Подай заявку через главное меню 👇</i>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✖️ Закрыть", callback_data="close_panel")]]),
+            parse_mode="HTML"
+        )
+        return
+
+    text = "📜 <b>ИСТОРИЯ ЗАЯВОК</b>\n────────────────\n\n"
+
+    if battles:
+        text += "⚔️ <b>Баттлы:</b>\n"
+        for date, time in battles:
+            text += f"  • 📅 {date}  ⏰ {time}\n  🟡 Статус: активный\n\n"
+
+    if bdays:
+        text += "🎂 <b>Дни рождения:</b>\n"
+        for nick, sl_id, date in bdays:
+            text += f"  • 🎭 {nick}  📅 {date}\n  🟡 Статус: активный\n\n"
+
+    if payouts:
+        text += "💰 <b>Выводы:</b>\n"
+        for p_id, status, created_at, confirmed_at in payouts:
+            if status == 0:
+                status_text = "⏳ Ожидает подтверждения"
+            elif status == 1:
+                status_text = "✅ Подтверждён, ожидает выплаты"
+            else:
+                status_text = "💸 Выплачено"
+            text += f"  • 🕐 {created_at or '—'}\n  {status_text}\n\n"
+
     await message.answer(
-        "🔧 <b>Раздел в разработке</b>\n\nСкоро здесь появится история твоих заявок и выплат.",
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✖️ Закрыть", callback_data="close_panel")]]),
         parse_mode="HTML"
     )
@@ -686,9 +754,9 @@ async def handle_info(message: Message):
 @dp.callback_query(F.data == "open_apply")
 async def open_apply(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚔️ Заявка на батл",           callback_data="apply_battle")],
-        [InlineKeyboardButton(text="🎂 Заявка на День Рождения",  callback_data="apply_bday")],
-        [InlineKeyboardButton(text="🚫 Закрыть",                  callback_data="cancel_action")]
+        [InlineKeyboardButton(text="⚔️ Заявка на батл",          callback_data="apply_battle")],
+        [InlineKeyboardButton(text="🎂 Заявка на День Рождения", callback_data="apply_bday")],
+        [InlineKeyboardButton(text="🚫 Закрыть",                 callback_data="cancel_action")]
     ])
     await callback.message.answer("<b>Выбери, какую заявку хочешь подать:</b>", reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -710,19 +778,57 @@ async def open_payout(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "payout_request")
 async def process_payout(callback: CallbackQuery):
-    await add_payout(callback.from_user.id)
+    # [3] add_payout теперь возвращает ID, используем для кнопки «Подтвердить заявку»
+    p_id = await add_payout(callback.from_user.id)
     report = (
         f"💰 <b>НОВАЯ ЗАЯВКА НА ВЫВОД!</b>\n\n"
         f"👤 От: <a href='tg://user?id={callback.from_user.id}'>{callback.from_user.full_name}</a>\n"
         f"USER_ID:<code>{callback.from_user.id}</code>"
     )
+    # [3] Кнопка быстрого подтверждения прямо из уведомления
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить заявку", callback_data=f"quick_confirm_{p_id}")]
+    ])
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, report, parse_mode="HTML")
+            await bot.send_message(admin_id, report, reply_markup=admin_kb, parse_mode="HTML")
         except Exception:
             pass
     await callback.message.edit_text("✅ <b>Обработка запущена! Ожидай перевода.</b>", parse_mode="HTML")
     await callback.answer()
+
+# [3] Быстрое подтверждение вывода прямо из уведомления
+@dp.callback_query(F.data.startswith("quick_confirm_"), F.from_user.id.in_(ADMIN_IDS))
+async def quick_confirm_payout(callback: CallbackQuery):
+    p_id = int(callback.data.split("_")[2])
+    payout = await get_payout_by_id(p_id)
+    if not payout:
+        await callback.answer("❌ Заявка не найдена.", show_alert=True)
+        return
+    p_id_val, u_id, status, created_at, confirmed_at, full_name = payout
+    if status == 1:
+        await callback.answer("⚠️ Эта заявка уже подтверждена!", show_alert=True)
+        return
+    await confirm_payout(p_id)
+    try:
+        await bot.send_message(u_id, "✅ <b>Твой вывод подтверждён!</b>\n\nВыплата обрабатывается и скоро придёт на твои реквизиты.", parse_mode="HTML")
+    except Exception:
+        pass
+    # Убираем кнопку из уведомления, чтобы не нажимали повторно
+    try:
+        new_text = (
+            f"💰 <b>ЗАЯВКА НА ВЫВОД ПОДТВЕРЖДЕНА</b>\n\n"
+            f"👤 <a href='tg://user?id={u_id}'>{full_name}</a>\n"
+            f"✅ Подтверждено: {datetime.now().strftime('%H:%M, %d.%m.%Y')}\n\n"
+            f"<i>Вывод добавлен в раздел «Выплатить вывод»</i>"
+        )
+        await callback.message.edit_text(new_text, reply_markup=None, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer(
+        "✅ Вывод подтверждён и автоматически добавлен в раздел «Выплатить вывод»!",
+        show_alert=True
+    )
 
 @dp.callback_query(F.data == "open_question")
 async def open_question(callback: CallbackQuery, state: FSMContext):
